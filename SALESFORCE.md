@@ -9,7 +9,7 @@ gstack provides Claude Code agents with "eyes" to see and interact with web appl
 ## Installation
 
 ```bash
-git clone https://github.com/vnehess/gstack.git ~/.claude/skills/gstack && cd ~/.claude/skills/gstack && ./setup
+git clone https://github.com/vnehess/gstack.git ~/Repositories/gstack && cd ~/Repositories/gstack && ./setup
 ```
 
 ## Salesforce-Specific Setup
