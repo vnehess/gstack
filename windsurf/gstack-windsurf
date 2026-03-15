@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+# gstack-windsurf — Browse wrapper for Windsurf/Cascade environment
+# This script provides a convenient interface to gstack's browse binary
+# from within the Windsurf IDE for Salesforce development.
+
+set -e
+
+GSTACK_DIR="$HOME/Repositories/gstack"
+BROWSE_BIN="$GSTACK_DIR/browse/dist/browse"
+PLM_DIR="$HOME/Repositories/PLM"
+GSTACK_DIR_PLM="$PLM_DIR/.gstack"
+
+# Ensure PATH includes bun
+export PATH="$HOME/.bun/bin:$PATH"
+
+# Function to show usage
+show_usage() {
+    cat << 'EOF'
+Usage: gstack-windsurf <command> [args...]
+
+Salesforce-aware browsing commands:
+  goto-org [org-alias]     Navigate to Salesforce dev org login
+  login [org-alias]        Login to Salesforce org (uses sf CLI for session)
+  screenshot [path]        Take screenshot of current page
+  browse <args...>         Pass through to browse binary
+
+Standard browse commands (pass-through):
+  goto <url>               Navigate to URL
+  click <selector>         Click element
+  fill <selector> <text>   Fill input field
+  snapshot [-i]            Get page snapshot with element refs
+  text                     Get page text content
+  console                  Get browser console logs
+  cookies                  Get/set cookies
+
+Examples:
+  gstack-windsurf goto-org mydevorg
+  gstack-windsurf login mydevorg
+  gstack-windsurf screenshot /tmp/home.png
+  gstack-windsurf browse goto https://mydevorg.salesforce.com
+
+Environment:
+  GSTACK_DIR    Override gstack installation directory
+  BROWSE_BIN    Override browse binary path
+EOF
+}
+
+# Get Salesforce org URL from sf CLI
+get_org_url() {
+    local org_alias="${1:-}"
+    if [ -n "$org_alias" ]; then
+        sf org open -o "$org_alias" --url-only 2>/dev/null || echo ""
+    else
+        # Try to get default org
+        sf org open --url-only 2>/dev/null || echo ""
+    fi
+}
+
+# Get org alias from sf CLI
+get_default_org_alias() {
+    sf org list --json 2>/dev/null | grep -o '"alias":"[^"]*"' | head -1 | cut -d'"' -f4
+}
+
+# Main command handler
+case "${1:-}" in
+    --help|-h|help)
+        show_usage
+        exit 0
+        ;;
+
+    goto-org)
+        org_alias="${2:-}"
+        if [ -z "$org_alias" ]; then
+            org_alias=$(get_default_org_alias)
+            echo "Using default org: $org_alias"
+        fi
+
+        org_url=$(get_org_url "$org_alias")
+        if [ -z "$org_url" ]; then
+            echo "Error: Could not get org URL. Ensure you're authenticated with 'sf org login'" >&2
+            exit 1
+        fi
+
+        echo "Navigating to: $org_url"
+        cd "$PLM_DIR" && "$BROWSE_BIN" goto "$org_url"
+        ;;
+
+    login)
+        org_alias="${2:-}"
+        org_url=$(get_org_url "$org_alias")
+
+        if [ -z "$org_url" ]; then
+            echo "Error: Could not get org URL" >&2
+            exit 1
+        fi
+
+        echo "Opening Salesforce login at: $org_url"
+        echo "After login completes, cookies will be preserved for the session."
+        cd "$PLM_DIR" && "$BROWSE_BIN" goto "$org_url"
+
+        # Wait a moment and take initial screenshot
+        sleep 2
+        echo ""
+        echo "Use 'gstack-windsurf screenshot /tmp/salesforce.png' to capture the page"
+        ;;
+
+    screenshot)
+        path="${2:-/tmp/salesforce-$(date +%Y%m%d-%H%M%S).png}"
+        echo "Taking screenshot: $path"
+        cd "$PLM_DIR" && "$BROWSE_BIN" screenshot "$path"
+        echo "Screenshot saved: $path"
+        ;;
+
+    browse)
+        # Pass all remaining args to browse binary
+        shift
+        cd "$PLM_DIR" && "$BROWSE_BIN" "$@"
+        ;;
+
+    goto-record)
+        # Navigate to a Salesforce record page
+        # Usage: goto-record <record-id> [org-alias]
+        record_id="${2:-}"
+        org_alias="${3:-ron@plm20160415.dev}"
+
+        if [ -z "$record_id" ]; then
+            echo "Error: Record ID required" >&2
+            echo "Usage: goto-record <record-id> [org-alias]" >&2
+            exit 1
+        fi
+
+        # Get org info
+        org_info=$(sf org display --target-org "$org_alias" 2>/dev/null || echo "")
+        if [ -z "$org_info" ]; then
+            echo "Error: Could not get org info for $org_alias" >&2
+            exit 1
+        fi
+
+        # Extract instance URL and access token
+        instance_url=$(echo "$org_info" | grep "Instance Url" | awk -F'│' '{print $2}' | tr -d ' ')
+        access_token=$(echo "$org_info" | grep "Access Token" | awk -F'│' '{print $2}' | tr -d ' ')
+
+        if [ -z "$instance_url" ] || [ -z "$access_token" ]; then
+            echo "Error: Could not get instance URL or access token" >&2
+            exit 1
+        fi
+
+        # Convert to Lightning URL
+        # Extract the domain part (e.g., 415-dev-ed.my.salesforce.com)
+        domain=$(echo "$instance_url" | sed 's|https://||' | sed 's|/||g')
+        lightning_domain=$(echo "$domain" | sed 's|.my.salesforce.com|.lightning.force.com|')
+
+        # Build Lightning record URL
+        # Try both namespaced and non-namespaced versions
+        record_url="https://${lightning_domain}/lightning/r/Item__c/${record_id}/view"
+
+        echo "Setting authentication cookie..."
+        # Set the sid cookie on the salesforce.com domain first
+        cd "$PLM_DIR" && "$BROWSE_BIN" goto "$instance_url" 2>/dev/null || true
+        cd "$PLM_DIR" && "$BROWSE_BIN" cookie "sid=${access_token}" 2>/dev/null || true
+
+        echo "Navigating to: $record_url"
+        cd "$PLM_DIR" && "$BROWSE_BIN" goto "$record_url"
+        ;;
+
+    record-screenshot)
+        # Navigate to record and take screenshot
+        record_id="${2:-}"
+        org_alias="${3:-ron@plm20160415.dev}"
+
+        if [ -z "$record_id" ]; then
+            echo "Error: Record ID required" >&2
+            echo "Usage: record-screenshot <record-id> [org-alias]" >&2
+            exit 1
+        fi
+
+        # Navigate to record
+        "$0" goto-record "$record_id" "$org_alias"
+
+        # Wait for page load
+        sleep 5
+
+        # Take screenshot
+        output_path="/tmp/record-${record_id}-$(date +%Y%m%d-%H%M%S).png"
+        echo "Taking screenshot: $output_path"
+        cd "$PLM_DIR" && "$BROWSE_BIN" screenshot "$output_path"
+        echo "Screenshot saved: $output_path"
+        ;;
+esac
