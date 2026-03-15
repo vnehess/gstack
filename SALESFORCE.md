@@ -68,14 +68,6 @@ This imports your existing Salesforce login session so the browser automation ca
 # Verify field visibility, sections, and related lists
 ```
 
-## Integration with GoogleSheetsConnector
-
-The gstack browser automation complements the GoogleSheetsConnector project by enabling:
-
-1. **Visual Testing** - Verify that data synced from Google Sheets displays correctly in Salesforce
-2. **Flow Validation** - Test automation that triggers from Google Sheets integration
-3. **Permission Testing** - Validate that permission sets created via API work as expected in the UI
-4. **User Experience Testing** - Ensure the integration provides a smooth user experience
 
 ## Key gstack Skills for Salesforce
 
