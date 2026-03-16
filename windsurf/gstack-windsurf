@@ -22,6 +22,7 @@ Salesforce-aware browsing commands:
   goto-org [org-alias]     Navigate to Salesforce dev org login
   login [org-alias]        Login to Salesforce org (uses sf CLI for session)
   wait-for-load [timeout]  Wait for page to fully load (handles Lightning spinners)
+  find-item <item-number> [org-alias]  Find item by item number using SOQL and navigate to it
   screenshot [path]        Take screenshot of current page
   browse <args...>         Pass through to browse binary
 
@@ -37,6 +38,7 @@ Standard browse commands (pass-through):
 Examples:
   gstack-windsurf goto-org mydevorg
   gstack-windsurf wait-for-load 30
+  gstack-windsurf find-item 0000001-00-01 mydevorg
   gstack-windsurf login mydevorg
   gstack-windsurf screenshot /tmp/home.png
   gstack-windsurf browse goto https://mydevorg.salesforce.com
@@ -47,20 +49,103 @@ Environment:
 EOF
 }
 
+# Get item ID by item number using SOQL
+get_item_id_by_number() {
+    local item_number="$1"
+    local org_alias="${2:-}"
+
+    # Get default org if not specified
+    if [ -z "$org_alias" ]; then
+        org_alias=$(get_default_org_alias)
+        echo "Using default org: $org_alias" >&2
+    fi
+
+    # Detect namespace for this org
+    namespace=$(detect_namespace_for_org "$org_alias")
+    object_name="${namespace}Item__c"
+
+    # Use sf CLI to query for the item
+    query_result=$(sf data query --query "SELECT Id FROM $object_name WHERE Name = '$item_number' LIMIT 1" --target-org "$org_alias" --json 2>/dev/null)
+
+    echo "DEBUG: query_result=$query_result" >&2
+
+    # Extract the ID from the JSON result
+    item_id=$(echo "$query_result" | grep -o '"Id"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4 | head -1)
+
+    echo "DEBUG: extracted item_id=$item_id" >&2
+
+    if [ -n "$item_id" ]; then
+        echo "$item_id"
+    else
+        echo ""
+    fi
+}
+
+# Detect namespace for a specific org
+detect_namespace_for_org() {
+    local org_alias="$1"
+
+    # Try to query a common object to see what namespace is used
+    # First try without namespace
+    test_result=$(sf data query --query "SELECT Id FROM Item__c LIMIT 1" --target-org "$org_alias" --json 2>/dev/null)
+
+    if echo "$test_result" | grep -q '"totalSize":0'; then
+        # No records found, but object might exist - try to describe it
+        describe_result=$(sf sobject describe --sobject Item__c --target-org "$org_alias" --json 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            echo ""
+            return
+        fi
+    fi
+
+    if echo "$test_result" | grep -q '"status":0'; then
+        # Object exists without namespace
+        echo ""
+        return
+    fi
+
+    # Try common namespaces
+    for ns in HESS__ PLMRON__ PDLM__; do
+        test_result=$(sf data query --query "SELECT Id FROM ${ns}Item__c LIMIT 1" --target-org "$org_alias" --json 2>/dev/null)
+        if echo "$test_result" | grep -q '"status":0'; then
+            echo "$ns"
+            return
+        fi
+    done
+
+    # Default to no namespace
+    echo ""
+}
+
 # Get Salesforce org URL from sf CLI
 get_org_url() {
     local org_alias="${1:-}"
     if [ -n "$org_alias" ]; then
-        sf org open -o "$org_alias" --url-only 2>/dev/null || echo ""
+        org_url=$(sf org display --target-org "$org_alias" --json 2>/dev/null | jq -r '.result.instanceUrl // empty')
+        echo "$org_url"
     else
         # Try to get default org
-        sf org open --url-only 2>/dev/null || echo ""
+        org_url=$(sf org display --json 2>/dev/null | jq -r '.result.instanceUrl // empty')
+        echo "$org_url"
+    fi
+}
+
+# Get namespace from Organization object
+get_namespace() {
+    local org_alias="${1:-}"
+    if [ -n "$org_alias" ]; then
+        namespace=$(sf data query --query "SELECT NamespacePrefix FROM Organization LIMIT 1" --target-org "$org_alias" --json 2>/dev/null | jq -r '.result.records[0].NamespacePrefix // empty')
+        echo "$namespace"
+    else
+        # Try default org
+        namespace=$(sf data query --query "SELECT NamespacePrefix FROM Organization LIMIT 1" --json 2>/dev/null | jq -r '.result.records[0].NamespacePrefix // empty')
+        echo "$namespace"
     fi
 }
 
 # Get org alias from sf CLI
 get_default_org_alias() {
-    sf org list --json 2>/dev/null | grep -o '"alias":"[^"]*"' | head -1 | cut -d'"' -f4
+    sf org list --json 2>/dev/null | jq -r '.result[0].alias // empty'
 }
 
 # Main command handler
@@ -164,6 +249,49 @@ case "${1:-}" in
         fi
         ;;
 
+    find-item)
+        # Find item by item number using SOQL and navigate to it
+        # Usage: find-item <item-number> [org-alias]
+        item_number="${2:-}"
+        org_alias="${3:-}"
+
+        if [ -z "$item_number" ]; then
+            echo "Error: Item number required" >&2
+            echo "Usage: find-item <item-number> [org-alias]" >&2
+            exit 1
+        fi
+
+        echo "Finding item: $item_number"
+
+        # Get item ID using SOQL (redirect debug output to stderr)
+        item_id=$(get_item_id_by_number "$item_number" "$org_alias" 2>/dev/null)
+
+        echo "DEBUG: Got item_id: '$item_id'" >&2
+
+        if [ -z "$item_id" ]; then
+            echo "Error: Item '$item_number' not found" >&2
+            exit 1
+        fi
+
+        echo "Found item ID: $item_id"
+
+        # Navigate to the item using the existing goto-record function
+        echo "Navigating to item..."
+        "$0" goto-record "$item_id" "$org_alias"
+
+        # Wait for item page to load
+        echo "Waiting for item page to load..."
+        "$0" wait-for-load 30
+
+        echo "✅ Successfully navigated to item: $item_number (ID: $item_id)"
+
+        # Take screenshot of the loaded item page
+        screenshot_path="/tmp/item-$item_number-$(date +%Y%m%d-%H%M%S).png"
+        echo "Taking screenshot: $screenshot_path"
+        "$0" screenshot "$screenshot_path"
+        echo "Screenshot saved: $screenshot_path"
+        ;;
+
     goto-record)
         # Navigate to a Salesforce record page
         # Usage: goto-record <record-id> [org-alias]
@@ -176,30 +304,42 @@ case "${1:-}" in
             exit 1
         fi
 
-        # Get org info
-        org_info=$(sf org display --target-org "$org_alias" 2>/dev/null || echo "")
-        if [ -z "$org_info" ]; then
+        # Get org info using JSON
+        org_info=$(sf org display --target-org "$org_alias" --json 2>/dev/null || echo "{}")
+        if [ "$org_info" = "{}" ]; then
             echo "Error: Could not get org info for $org_alias" >&2
             exit 1
         fi
 
-        # Extract instance URL and access token
-        instance_url=$(echo "$org_info" | grep "Instance Url" | awk -F'│' '{print $2}' | tr -d ' ')
-        access_token=$(echo "$org_info" | grep "Access Token" | awk -F'│' '{print $2}' | tr -d ' ')
+        # Extract instance URL and access token using jq
+        instance_url=$(echo "$org_info" | jq -r '.result.instanceUrl // empty')
+        access_token=$(echo "$org_info" | jq -r '.result.accessToken // empty')
 
         if [ -z "$instance_url" ] || [ -z "$access_token" ]; then
             echo "Error: Could not get instance URL or access token" >&2
             exit 1
         fi
 
+        # Get namespace from Organization object
+        namespace=$(get_namespace "$org_alias")
+        if [ -z "$namespace" ]; then
+            echo "Warning: Could not determine namespace, using non-namespaced fields" >&2
+            namespace=""
+        else
+            echo "Using namespace: ${namespace}"
+        fi
+
         # Convert to Lightning URL
-        # Extract the domain part (e.g., 415-dev-ed.my.salesforce.com)
+        # Extract the domain part (e.g., hess-dev-ed.my.salesforce.com)
         domain=$(echo "$instance_url" | sed 's|https://||' | sed 's|/||g')
         lightning_domain=$(echo "$domain" | sed 's|.my.salesforce.com|.lightning.force.com|')
 
-        # Build Lightning record URL
-        # Try both namespaced and non-namespaced versions
-        record_url="https://${lightning_domain}/lightning/r/Item__c/${record_id}/view"
+        # Build Lightning record URL with namespace
+        if [ -n "$namespace" ]; then
+            record_url="https://${lightning_domain}/lightning/r/${namespace}__Item__c/${record_id}/view"
+        else
+            record_url="https://${lightning_domain}/lightning/r/Item__c/${record_id}/view"
+        fi
 
         echo "Setting authentication cookie..."
         # Set the sid cookie on the salesforce.com domain first
@@ -225,7 +365,7 @@ case "${1:-}" in
         "$0" goto-record "$record_id" "$org_alias"
 
         # Wait for page load
-        sleep 10
+        "$0" wait-for-load 20
 
         # Take screenshot
         output_path="/tmp/record-${record_id}-$(date +%Y%m%d-%H%M%S).png"
