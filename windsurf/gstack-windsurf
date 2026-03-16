@@ -106,6 +106,8 @@ case "${1:-}" in
 
     screenshot)
         path="${2:-/tmp/salesforce-$(date +%Y%m%d-%H%M%S).png}"
+        echo "Waiting for page to load..."
+        sleep 3
         echo "Taking screenshot: $path"
         cd "$PLM_DIR" && "$BROWSE_BIN" screenshot "$path"
         echo "Screenshot saved: $path"
@@ -178,7 +180,7 @@ case "${1:-}" in
         "$0" goto-record "$record_id" "$org_alias"
 
         # Wait for page load
-        sleep 5
+        sleep 10
 
         # Take screenshot
         output_path="/tmp/record-${record_id}-$(date +%Y%m%d-%H%M%S).png"
