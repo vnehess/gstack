@@ -65,7 +65,18 @@ This imports your existing Salesforce login session so the browser automation ca
 ```bash
 # After modifying page layouts
 /browse [your-org].my.salesforce.com/lightning/r/[object_name]/view
+/wait-for-load 30  # Wait for page to fully load
 # Verify field visibility, sections, and related lists
+```
+
+### Testing Tab Navigation
+```bash
+# Navigate to record and click specific tabs
+/browse [your-org].my.salesforce.com/lightning/r/Item__c/[record_id]/view
+/wait-for-load 20
+/browse click "//a[contains(text(), 'BOM')]"
+/wait-for-load 30  # Wait for BOM tab to load
+/browse screenshot /tmp/bom-tab.png
 ```
 
 
@@ -74,6 +85,7 @@ This imports your existing Salesforce login session so the browser automation ca
 | Skill | Use Case | Example |
 |-------|----------|---------|
 | `/browse` | Navigate and interact with Salesforce UI | Test record pages, flows, VF pages |
+| `/wait-for-load` | Wait for Lightning pages to fully load | Handle spinners and dynamic content |
 | `/qa` | Automated testing of changes | Test deployment impact |
 | `/setup-browser-cookies` | Import Salesforce session | Enable authenticated testing |
 | `/review` | Code review for Apex/LWC | Review metadata changes |
@@ -90,9 +102,10 @@ This imports your existing Salesforce login session so the browser automation ca
 
 1. **Use Sandbox Environments** - Always test in sandbox before production
 2. **Clean Session State** - Clear browser cookies between different org testing
-3. **Document Test Cases** - Use `/retro` to track test results over time
-4. **Combine with API Testing** - Use browser testing for UI, API testing for backend logic
-5. **Version Control** - Store test results and screenshots in git for audit trails
+3. **Wait for Page Loads** - Use `/wait-for-load` after navigation and tab clicks for Lightning pages
+4. **Document Test Cases** - Use `/retro` to track test results over time
+5. **Combine with API Testing** - Use browser testing for UI, API testing for backend logic
+6. **Version Control** - Store test results and screenshots in git for audit trails
 
 ## Troubleshooting
 
@@ -117,6 +130,7 @@ This imports your existing Salesforce login session so the browser automation ca
 # Complete test cycle for a new feature
 /plan-eng-review  # Plan the testing approach
 /browse [org].my.salesforce.com  # Navigate to feature
+/wait-for-load 30  # Wait for page to fully load
 /qa  # Run automated tests
 /retro  # Document results
 ```
