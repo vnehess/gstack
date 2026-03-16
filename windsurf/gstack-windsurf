@@ -21,6 +21,7 @@ Usage: gstack-windsurf <command> [args...]
 Salesforce-aware browsing commands:
   goto-org [org-alias]     Navigate to Salesforce dev org login
   login [org-alias]        Login to Salesforce org (uses sf CLI for session)
+  wait-for-load [timeout]  Wait for page to fully load (handles Lightning spinners)
   screenshot [path]        Take screenshot of current page
   browse <args...>         Pass through to browse binary
 
@@ -35,6 +36,7 @@ Standard browse commands (pass-through):
 
 Examples:
   gstack-windsurf goto-org mydevorg
+  gstack-windsurf wait-for-load 30
   gstack-windsurf login mydevorg
   gstack-windsurf screenshot /tmp/home.png
   gstack-windsurf browse goto https://mydevorg.salesforce.com
@@ -117,6 +119,49 @@ case "${1:-}" in
         # Pass all remaining args to browse binary
         shift
         cd "$PLM_DIR" && "$BROWSE_BIN" "$@"
+        ;;
+
+    wait-for-load)
+        # Wait for page to fully load (handles Lightning loading spinners)
+        # Usage: wait-for-load [timeout-seconds]
+        timeout="${2:-30}"
+
+        echo "Waiting for page to load (timeout: ${timeout}s)..."
+
+        # Initial wait for basic page load
+        sleep 3
+
+        # Wait for Lightning spinner to disappear
+        echo "Checking for Lightning loading spinners..."
+        for i in $(seq 1 $((timeout/3))); do
+            spinner_status=$(cd "$PLM_DIR" && "$BROWSE_BIN" js "document.querySelector('.slds-spinner') ? 'loading' : 'loaded'" 2>/dev/null || echo "error")
+
+            if [ "$spinner_status" = "loaded" ]; then
+                echo "Page loaded successfully (spinner disappeared)"
+                break
+            fi
+
+            echo "Still loading... ($((i*3))s elapsed)"
+            sleep 3
+        done
+
+        # Additional wait for dynamic content
+        echo "Waiting for dynamic content..."
+        sleep 5
+
+        # Final check
+        final_check=$(cd "$PLM_DIR" && "$BROWSE_BIN" js "document.readyState" 2>/dev/null || echo "unknown")
+        echo "Document ready state: $final_check"
+
+        # Check for any remaining loading indicators
+        remaining_loaders=$(cd "$PLM_DIR" && "$BROWSE_BIN" js "document.querySelectorAll('.slds-spinner, .loading, .spinner').length" 2>/dev/null || echo "0")
+        echo "Remaining loading indicators: $remaining_loaders"
+
+        if [ "$remaining_loaders" = "0" ]; then
+            echo "✅ Page appears to be fully loaded"
+        else
+            echo "⚠️  Page may still be loading (proceeding anyway)"
+        fi
         ;;
 
     goto-record)
