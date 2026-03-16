@@ -60,19 +60,20 @@ get_item_id_by_number() {
         echo "Using default org: $org_alias" >&2
     fi
 
-    # Detect namespace for this org
-    namespace=$(detect_namespace_for_org "$org_alias")
-    object_name="${namespace}Item__c"
+    # Get namespace for this org
+    namespace=$(get_namespace "$org_alias")
+    if [ -n "$namespace" ]; then
+        object_name="${namespace}__Item__c"
+    else
+        # Assume production org with managed package namespace
+        object_name="PDLM__Item__c"
+    fi
 
     # Use sf CLI to query for the item
     query_result=$(sf data query --query "SELECT Id FROM $object_name WHERE Name = '$item_number' LIMIT 1" --target-org "$org_alias" --json 2>/dev/null)
 
-    echo "DEBUG: query_result=$query_result" >&2
-
     # Extract the ID from the JSON result
     item_id=$(echo "$query_result" | grep -o '"Id"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4 | head -1)
-
-    echo "DEBUG: extracted item_id=$item_id" >&2
 
     if [ -n "$item_id" ]; then
         echo "$item_id"
@@ -261,19 +262,14 @@ case "${1:-}" in
             exit 1
         fi
 
-        echo "Finding item: $item_number"
-
         # Get item ID using SOQL (redirect debug output to stderr)
         item_id=$(get_item_id_by_number "$item_number" "$org_alias" 2>/dev/null)
-
-        echo "DEBUG: Got item_id: '$item_id'" >&2
 
         if [ -z "$item_id" ]; then
             echo "Error: Item '$item_number' not found" >&2
             exit 1
         fi
 
-        echo "Found item ID: $item_id"
 
         # Navigate to the item using the existing goto-record function
         echo "Navigating to item..."
@@ -323,8 +319,8 @@ case "${1:-}" in
         # Get namespace from Organization object
         namespace=$(get_namespace "$org_alias")
         if [ -z "$namespace" ]; then
-            echo "Warning: Could not determine namespace, using non-namespaced fields" >&2
-            namespace=""
+            echo "Warning: Could not determine namespace, assuming production org with PDLM namespace" >&2
+            namespace="PDLM"
         else
             echo "Using namespace: ${namespace}"
         fi
@@ -335,11 +331,7 @@ case "${1:-}" in
         lightning_domain=$(echo "$domain" | sed 's|.my.salesforce.com|.lightning.force.com|')
 
         # Build Lightning record URL with namespace
-        if [ -n "$namespace" ]; then
-            record_url="https://${lightning_domain}/lightning/r/${namespace}__Item__c/${record_id}/view"
-        else
-            record_url="https://${lightning_domain}/lightning/r/Item__c/${record_id}/view"
-        fi
+        record_url="https://${lightning_domain}/lightning/r/${namespace}__Item__c/${record_id}/view"
 
         echo "Setting authentication cookie..."
         # Set the sid cookie on the salesforce.com domain first
